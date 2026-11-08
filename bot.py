@@ -29,7 +29,9 @@ bypassed_users = set()
 
 # ── Database ──────────────────────────────────────────────
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "miles.db")
+# Use /data (persistent volume on Railway) if it exists, otherwise local dir
+DATA_DIR = "/data" if os.path.isdir("/data") else os.path.dirname(__file__)
+DB_PATH = os.path.join(DATA_DIR, "miles.db")
 
 def get_db():
     conn = sqlite3.connect(DB_PATH)
@@ -217,6 +219,7 @@ async def on_ready():
     log.info(f"Bot online as {bot.user} (ID: {bot.user.id})")
     log.info(f"Connected to {len(bot.guilds)} server(s): {', '.join(g.name for g in bot.guilds)}")
     log.info(f"Daily mile limit: {DAILY_MILE_LIMIT:,.0f}")
+    log.info(f"Database path: {DB_PATH}")
 
 @bot.command(name="newtrip")
 async def newtrip(ctx, miles: str = None):
