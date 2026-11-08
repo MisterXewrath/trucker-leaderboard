@@ -23,6 +23,10 @@ log = logging.getLogger("trucker-bot")
 DAILY_MILE_LIMIT = 1000  # max miles per user in a rolling 24h window
 ADMIN_ROLE_NAME = "Trucker Admin"  # users with this role get admin commands
 
+# Users exempt from mile limits (both daily 1000 and per-trip 10000)
+# Stored as a set of user IDs — toggled via !admin-bypass @user
+bypassed_users = set()
+
 # ── Database ──────────────────────────────────────────────
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "miles.db")
@@ -230,13 +234,16 @@ async def newtrip(ctx, miles: str = None):
     if miles <= 0:
         await ctx.send("⚠️ Miles must be a positive number.")
         return
-    if miles > 10000:
+
+    is_bypassed = ctx.author.id in bypassed_users
+
+    if not is_bypassed and miles > 10000:
         await ctx.send("⚠️ That's over 10,000 miles in one trip — sure about that? Max is 10,000 per entry.")
         return
 
     # ── Daily limit check ──
     daily_so_far = get_daily_miles(ctx.author.id)
-    if daily_so_far + miles > DAILY_MILE_LIMIT:
+    if not is_bypassed and daily_so_far + miles > DAILY_MILE_LIMIT:
         remaining = max(0, DAILY_MILE_LIMIT - daily_so_far)
         await ctx.send(
             f"⚠️ Daily limit is **{DAILY_MILE_LIMIT:,.0f} miles** per 24 hours.\n"
@@ -484,6 +491,34 @@ async def admin_setlimit(ctx, new_limit: str = None):
     log.info(f"ADMIN SETLIMIT | {ctx.author} changed daily limit to {DAILY_MILE_LIMIT:.0f} mi")
     await ctx.send(f"✅ Daily limit updated to **{DAILY_MILE_LIMIT:,.0f} miles**.")
 
+@bot.command(name="admin-bypass")
+async def admin_bypass(ctx, member: discord.Member = None):
+    """Toggle mile limit bypass for a user. Admin only.  Usage: !admin-bypass @user"""
+    if not is_admin(ctx):
+        await ctx.send("🚫 You need the **Trucker Admin** role to use this.")
+        log.warning(f"ADMIN DENIED | {ctx.author} ({ctx.author.id}) tried !admin-bypass in #{ctx.channel}")
+        return
+    if member is None:
+        # Show current bypassed users
+        if not bypassed_users:
+            await ctx.send("No users are currently bypassing mile limits.\nUsage: `!admin-bypass @user`")
+        else:
+            names = []
+            for uid in bypassed_users:
+                m = ctx.guild.get_member(uid)
+                names.append(f"**{m.display_name}**" if m else f"Unknown ({uid})")
+            await ctx.send(f"🔓 Users bypassing limits: {', '.join(names)}\nUse `!admin-bypass @user` to toggle.")
+        return
+
+    if member.id in bypassed_users:
+        bypassed_users.discard(member.id)
+        log.info(f"ADMIN BYPASS OFF | {ctx.author} removed bypass for {member} ({member.id})")
+        await ctx.send(f"🔒 **{member.display_name}** is now subject to mile limits again.")
+    else:
+        bypassed_users.add(member.id)
+        log.info(f"ADMIN BYPASS ON | {ctx.author} granted bypass to {member} ({member.id})")
+        await ctx.send(f"🔓 **{member.display_name}** can now bypass all mile limits (daily + per-trip).")
+
 # ── Help ──────────────────────────────────────────────────
 
 @bot.command(name="help")
@@ -504,6 +539,7 @@ async def help_cmd(ctx):
         embed.add_field(name="!admin-addmiles @user <miles>", value="Add miles (bypasses daily limit)", inline=False)
         embed.add_field(name="!admin-stats", value="Server-wide stats overview", inline=False)
         embed.add_field(name="!admin-setlimit <miles>", value="Change daily mile limit", inline=False)
+        embed.add_field(name="!admin-bypass @user", value="Toggle mile limit bypass for a user", inline=False)
 
     await ctx.send(embed=embed)
 
