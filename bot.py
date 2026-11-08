@@ -3,10 +3,20 @@ from discord.ext import commands
 import sqlite3
 import os
 import random
+import logging
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# ── Logging ───────────────────────────────────────────────
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+log = logging.getLogger("trucker-bot")
 
 # ── Config ────────────────────────────────────────────────
 
@@ -200,7 +210,9 @@ def get_easter_egg(miles):
 
 @bot.event
 async def on_ready():
-    print(f"✅ Logged in as {bot.user} ({bot.user.id})")
+    log.info(f"Bot online as {bot.user} (ID: {bot.user.id})")
+    log.info(f"Connected to {len(bot.guilds)} server(s): {', '.join(g.name for g in bot.guilds)}")
+    log.info(f"Daily mile limit: {DAILY_MILE_LIMIT:,.0f}")
 
 @bot.command(name="newtrip")
 async def newtrip(ctx, miles: str = None):
@@ -231,6 +243,7 @@ async def newtrip(ctx, miles: str = None):
             f"You've already logged **{daily_so_far:,.1f}** today. "
             f"You can still log **{remaining:,.1f}** more miles."
         )
+        log.warning(f"DAILY LIMIT HIT | {ctx.author} ({ctx.author.id}) tried {miles:.1f} mi — already at {daily_so_far:.1f}/24h in #{ctx.channel}")
         return
 
     conn = get_db()
@@ -240,6 +253,8 @@ async def newtrip(ctx, miles: str = None):
     )
     conn.commit()
     conn.close()
+
+    log.info(f"TRIP LOGGED | {ctx.author} ({ctx.author.id}) +{miles:.1f} mi in #{ctx.channel} | daily: {daily_so_far + miles:.1f}/{DAILY_MILE_LIMIT:.0f}")
 
     stats = get_user_stats(ctx.author.id)
     embed = discord.Embed(
@@ -282,6 +297,7 @@ async def leaderboard(ctx, period: str = None):
         p, title = None, "All-Time Leaderboard"
 
     rows = get_leaderboard(period=p)
+    log.info(f"LEADERBOARD | {ctx.author} requested '{title}' in #{ctx.channel}")
     embed = discord.Embed(
         description=format_leaderboard(rows, title),
         color=0x3498db
@@ -291,6 +307,7 @@ async def leaderboard(ctx, period: str = None):
 @bot.command(name="mystats", aliases=["stats", "me"])
 async def mystats(ctx):
     """Show your personal stats."""
+    log.info(f"STATS | {ctx.author} ({ctx.author.id}) checked stats in #{ctx.channel}")
     stats = get_user_stats(ctx.author.id)
     if stats["alltime"]["trips"] == 0:
         await ctx.send("You haven't logged any trips yet! Use `!newtrip <miles>` to get started.")
@@ -324,6 +341,7 @@ async def undo(ctx):
     conn.execute("DELETE FROM trips WHERE id=?", (row[0],))
     conn.commit()
     conn.close()
+    log.info(f"UNDO | {ctx.author} ({ctx.author.id}) removed {row[1]:.1f} mi (trip #{row[0]}) in #{ctx.channel}")
     await ctx.send(f"✅ Removed your last trip ({row[1]:,.1f} miles).")
 
 # ── Admin Commands ────────────────────────────────────────
@@ -333,6 +351,7 @@ async def admin_reset(ctx, member: discord.Member = None):
     """Delete ALL trips for a user. Admin only."""
     if not is_admin(ctx):
         await ctx.send("🚫 You need the **Trucker Admin** role to use this.")
+        log.warning(f"ADMIN DENIED | {ctx.author} ({ctx.author.id}) tried !admin-reset in #{ctx.channel}")
         return
     if member is None:
         await ctx.send("⚠️ Usage: `!admin-reset @user`")
@@ -347,6 +366,7 @@ async def admin_reset(ctx, member: discord.Member = None):
     conn.execute("DELETE FROM trips WHERE user_id=?", (member.id,))
     conn.commit()
     conn.close()
+    log.info(f"ADMIN RESET | {ctx.author} wiped {count} trips for {member} ({member.id})")
     await ctx.send(f"🗑️ Deleted **{count}** trips for **{member.display_name}**.")
 
 @bot.command(name="admin-remove")
@@ -354,6 +374,7 @@ async def admin_remove(ctx, member: discord.Member = None, count: int = 1):
     """Remove the last N trips for a user. Admin only.  Usage: !admin-remove @user 3"""
     if not is_admin(ctx):
         await ctx.send("🚫 You need the **Trucker Admin** role to use this.")
+        log.warning(f"ADMIN DENIED | {ctx.author} ({ctx.author.id}) tried !admin-remove in #{ctx.channel}")
         return
     if member is None:
         await ctx.send("⚠️ Usage: `!admin-remove @user [count]`")
@@ -373,6 +394,7 @@ async def admin_remove(ctx, member: discord.Member = None, count: int = 1):
     conn.execute(f"DELETE FROM trips WHERE id IN ({','.join('?' * len(ids))})", ids)
     conn.commit()
     conn.close()
+    log.info(f"ADMIN REMOVE | {ctx.author} removed {len(rows)} trip(s) ({total_miles:.1f} mi) from {member} ({member.id})")
     await ctx.send(f"🗑️ Removed **{len(rows)}** trip(s) ({total_miles:,.1f} miles) from **{member.display_name}**.")
 
 @bot.command(name="admin-addmiles")
@@ -380,6 +402,7 @@ async def admin_addmiles(ctx, member: discord.Member = None, miles: str = None):
     """Add miles to a user (bypasses daily limit). Admin only.  Usage: !admin-addmiles @user 500"""
     if not is_admin(ctx):
         await ctx.send("🚫 You need the **Trucker Admin** role to use this.")
+        log.warning(f"ADMIN DENIED | {ctx.author} ({ctx.author.id}) tried !admin-addmiles in #{ctx.channel}")
         return
     if member is None or miles is None:
         await ctx.send("⚠️ Usage: `!admin-addmiles @user <miles>`")
@@ -398,6 +421,7 @@ async def admin_addmiles(ctx, member: discord.Member = None, miles: str = None):
     )
     conn.commit()
     conn.close()
+    log.info(f"ADMIN ADD | {ctx.author} added {miles:.1f} mi to {member} ({member.id})")
     await ctx.send(f"✅ Added **{miles:,.1f} miles** to **{member.display_name}** (admin override).")
 
 @bot.command(name="admin-stats")
@@ -405,6 +429,7 @@ async def admin_stats(ctx):
     """Show server-wide stats. Admin only."""
     if not is_admin(ctx):
         await ctx.send("🚫 You need the **Trucker Admin** role to use this.")
+        log.warning(f"ADMIN DENIED | {ctx.author} ({ctx.author.id}) tried !admin-stats in #{ctx.channel}")
         return
 
     conn = get_db()
@@ -433,6 +458,7 @@ async def admin_stats(ctx):
     embed.add_field(name="This Month", value=f"{month_miles:,.1f} mi", inline=True)
     if top:
         embed.add_field(name="🏆 Top Driver", value=f"**{top[0]}** — {top[1]:,.1f} mi", inline=False)
+    log.info(f"ADMIN STATS | {ctx.author} viewed server stats in #{ctx.channel} | {total_users} drivers, {total_trips} trips, {total_miles:.1f} mi total")
     await ctx.send(embed=embed)
 
 @bot.command(name="admin-setlimit")
@@ -441,6 +467,7 @@ async def admin_setlimit(ctx, new_limit: str = None):
     global DAILY_MILE_LIMIT
     if not is_admin(ctx):
         await ctx.send("🚫 You need the **Trucker Admin** role to use this.")
+        log.warning(f"ADMIN DENIED | {ctx.author} ({ctx.author.id}) tried !admin-setlimit in #{ctx.channel}")
         return
     if new_limit is None:
         await ctx.send(f"Current daily limit: **{DAILY_MILE_LIMIT:,} miles**\nUsage: `!admin-setlimit <miles>`")
@@ -454,6 +481,7 @@ async def admin_setlimit(ctx, new_limit: str = None):
         await ctx.send("⚠️ Limit must be at least 1 mile.")
         return
     DAILY_MILE_LIMIT = new_limit
+    log.info(f"ADMIN SETLIMIT | {ctx.author} changed daily limit to {DAILY_MILE_LIMIT:.0f} mi")
     await ctx.send(f"✅ Daily limit updated to **{DAILY_MILE_LIMIT:,.0f} miles**.")
 
 # ── Help ──────────────────────────────────────────────────
@@ -479,11 +507,25 @@ async def help_cmd(ctx):
 
     await ctx.send(embed=embed)
 
+# ── Error Handler ─────────────────────────────────────────
+
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound):
+        return  # ignore unknown commands silently
+    if isinstance(error, commands.MemberNotFound):
+        await ctx.send(f"⚠️ Couldn't find that member. Make sure you @mention them.")
+        log.warning(f"MEMBER NOT FOUND | {ctx.author} in #{ctx.channel}: {error}")
+        return
+    log.error(f"COMMAND ERROR | {ctx.author} ran !{ctx.command} in #{ctx.channel}: {error}")
+    await ctx.send("❌ Something went wrong. The error has been logged.")
+
 # ── Run ───────────────────────────────────────────────────
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
-    print("❌ Set DISCORD_TOKEN in .env or environment")
+    log.error("DISCORD_TOKEN not set — exiting")
     exit(1)
 
+log.info("Starting bot...")
 bot.run(TOKEN)
